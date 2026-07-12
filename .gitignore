@@ -1,0 +1,4 @@
+medirag.index
+*.mp4
+sample_data/
+.gradio/
