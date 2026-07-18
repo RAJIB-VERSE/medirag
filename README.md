@@ -1,22 +1,19 @@
-# MediRAG v2 — Multilingual, Multi-Domain Medical RAG Chatbot 🩺🌍
+# MediRAG v3 — Multilingual, Hybrid Search, Caching & Memory 🩺🌍
 
 A Retrieval-Augmented Generation (RAG) chatbot that answers health questions **in English, Bengali, Hindi, or any language mix**, grounded in **170K+ trusted medical Q&A entries** from 5 authoritative datasets. Cites its sources with real links and refuses to guess when it doesn't have reliable information.
 
 > ⚠️ **Disclaimer:** This is an educational/portfolio project, not a certified medical device. It does not provide medical advice, diagnosis, or treatment. Always consult a qualified healthcare professional for medical concerns.
 
-![MediRAG demo](assets/demo.gif)
-
 ---
 
-## 🆕 What's New in v2
+## 🆕 What's New in v3
 
-| Feature | v1 | v2 |
+| Feature | v2 | v3 |
 |---|---|---|
-| **Language support** | English only | 🌐 Bengali + English, Hindi + English, any mix |
-| **Medical coverage** | 47K entries (1 dataset) | 📚 170K+ entries (5 datasets) |
-| **Refusal accuracy** | LLM-only judgment | 🎯 Similarity threshold + LLM judgment |
-| **Emergency detection** | English keywords only | 🚨 English, Bengali, Hindi, transliterated |
-| **Source diversity** | NIH sources only | NIH + WikiDoc + medical flashcards |
+| **Startup Speed** | ~15 minutes (re-embeds every run) | ⚡ **< 30 seconds** (Caches indices to Google Drive) |
+| **Retrieval Engine** | Vector Search only (FAISS) | 🔀 **Hybrid Search** (FAISS semantic + BM25 keyword matching via RRF) |
+| **Embeddings** | English-only (`all-MiniLM-L6-v2`) | 🌐 **Native Multilingual** (`paraphrase-multilingual-MiniLM-L12-v2`) |
+| **Conversation** | Single-turn only | 🧠 **Multi-turn Memory** (remembers last 3 exchanges for context) |
 
 ---
 
@@ -27,32 +24,34 @@ Millions of people turn to search engines or general-purpose chatbots to self-di
 - **Unreliable sources** — blogs and forums with no editorial standards rank alongside credible medical institutions.
 - **Language barrier** — non-English speakers or those who mix languages (Bengali+English, Hindi+English) get no useful results from English-only medical tools.
 
-**MediRAG v2** addresses all three by:
-1. **Translating** mixed-language queries to English before retrieval (using the LLM itself)
-2. **Grounding** every answer in retrieved passages from **5 trusted medical datasets**
-3. **Refusing** to answer when retrieval quality is poor (using a similarity threshold), rather than hallucinating
+**MediRAG v3** addresses all three by:
+1. **Multilingual Embedding & Translation**: Using `paraphrase-multilingual-MiniLM` to natively understand foreign queries, and Phi-3 to translate mixed-language concepts.
+2. **Grounding** every answer in retrieved passages from **5 trusted medical datasets**.
+3. **Hybrid Search**: Fusing semantic meaning (FAISS) and exact medical terminology matching (BM25) to ensure perfect retrieval.
+4. **Refusing** to answer when retrieval quality is poor (using a similarity threshold), rather than hallucinating.
 
 ---
 
 ## ⚙️ How It Works (Architecture)
 
 ```
-User question (any language)
+User question (any language) + Memory (Last 3 turns)
       │
       ▼
 [Safety Check] ──► if emergency keywords detected ──► immediate safety message
       │                  (supports EN/BN/HI/transliterated)
       ▼ (no emergency)
-[Normalize Query] ──► Phi-3 translates mixed-language → English
-      │                  (skipped if already English)
-      ▼
-[Embed English query] ──► sentence-transformers (all-MiniLM-L6-v2)
+[Hybrid Retrieval]
+      │
+      ├─────► FAISS Vector Search (Multilingual Embeddings)
+      │
+      └─────► BM25 Keyword Search (English Translated Query)
       │
       ▼
-[FAISS similarity search] ──► retrieves top-k passages from 170K+ docs
-      │                         + similarity threshold filtering
+[Reciprocal Rank Fusion] ──► Merges FAISS and BM25 results, outputs Top 5
+      │
       ▼
-[Prompt construction] ──► English query + retrieved context + language instructions
+[Prompt construction] ──► User query + Top 5 Docs + Chat History + Language instructions
       │
       ▼
 [LLM generation] ──► Phi-3-mini-4k-instruct (4-bit quantized)
@@ -67,11 +66,13 @@ Answer + cited sources
 
 | Component | Tool |
 |---|---|
-| Embedding model | `sentence-transformers` (`all-MiniLM-L6-v2`) |
-| Vector search | FAISS with L2 distance + similarity threshold |
+| Embedding model | `sentence-transformers` (`paraphrase-multilingual-MiniLM-L12-v2`) |
+| Vector search | FAISS with L2 distance |
+| Keyword search | `rank_bm25` (Okapi BM25) |
+| Re-ranking | Reciprocal Rank Fusion (RRF) |
 | LLM | `microsoft/Phi-3-mini-4k-instruct` (4-bit via `bitsandbytes`) |
-| Query translation | Phi-3 (same model, zero-shot translation) |
-| Interface | Gradio |
+| Storage | Google Drive (Caching FAISS/BM25 indices) |
+| Interface | Gradio (`ChatInterface`) |
 | Compute | Google Colab (T4 GPU) |
 
 ### 📚 Data Sources (170K+ Q&A pairs)
@@ -91,19 +92,20 @@ Answer + cited sources
 1. Open `notebooks/MediRAG_Colab.ipynb` in Google Colab.
 2. Set the runtime to **T4 GPU**: `Runtime → Change runtime type → T4 GPU`.
 3. Run all cells top to bottom.
-4. The final cell launches a Gradio chat window with a public shareable link.
+4. **Important**: Colab will ask you for permission to mount your Google Drive. This is required to save the search indices so you don't have to wait 15 minutes every time you restart!
+5. The final cell launches a Gradio chat window with a public shareable link.
 
-No manual dataset download needed — all datasets stream directly from Hugging Face.
-
-> **Note:** First run takes ~10-15 minutes (embedding 170K documents). Subsequent runs are faster if the FAISS index is cached.
+> **Note:** First run takes ~10-15 minutes to embed 170K documents. Subsequent runs will load from Google Drive in **< 30 seconds**.
 
 ---
 
 ## 💬 Example Interactions
 
-**✅ English query — grounded, cited answer**
-> **Q: What is cholesterol?** *(previously refused in v1!)*
-> Cholesterol is a waxy, fat-like substance found in every cell of your body... [Source: WikiDoc]
+**✅ Multi-turn Memory**
+> **User:** What is asthma?
+> **MediRAG:** Asthma is a condition in which your airways narrow... [Source: WikiDoc]
+> **User:** What are its triggers? *(Model remembers context)*
+> **MediRAG:** Asthma triggers include airborne allergens, respiratory infections, physical activity... [Source: MedQuAD]
 
 **🌐 Bengali + English mix — translated and answered**
 > **Q: আমার মাথা ব্যথা হচ্ছে, what should I do?**
@@ -122,41 +124,6 @@ No manual dataset download needed — all datasets stream directly from Hugging 
 **🚨 Emergency — multilingual safety layer**
 > **Q: বুকে ব্যথা হচ্ছে** *(Bengali: "Having chest pain")*
 > ⚠️ This sounds like it could be a medical emergency. Please call **112** (India) or **911** (USA)...
-
----
-
-## 🧪 Evaluation
-
-Tested across 20+ queries spanning five categories:
-
-| Category | Example | Expected behavior | Result |
-|---|---|---|---|
-| Well-covered topic | "What is asthma?" | Grounded, cited answer | ✅ Pass |
-| Previously missing topic | "What is cholesterol?" | Now answered (from WikiDoc) | ✅ Pass (was ❌ in v1) |
-| Bengali + English mix | "আমার জ্বর হচ্ছে, is it dengue?" | Translate, retrieve, answer | ✅ Pass |
-| Hindi transliterated | "diabetes ke lakshan" | Translate, retrieve, answer | ✅ Pass |
-| Emergency (multilingual) | "সীনে মেন দর্দ" | Safety layer intercepts | ✅ Pass |
-| Unrelated query | "Capital of France?" | Doesn't force medical answer | ✅ Pass |
-
----
-
-## 🔍 Known Limitations
-
-- **Translation quality** — Phi-3's zero-shot translation works well for Bengali/Hindi but may struggle with very colloquial or rare dialects.
-- **Retrieval still depends on embedding similarity** — even with 170K docs, some niche topics may not have coverage.
-- **Not fine-tuned** — all grounding is retrieval-based; the LLM's baseline knowledge could still leak into edge-case answers.
-- **Single-turn only** — no conversation memory for follow-up questions.
-- **Response language** — the model attempts to respond in the user's language, but quality varies.
-
----
-
-## 🔭 Future Improvements
-
-- Upgrade to multilingual embedding model (`paraphrase-multilingual-MiniLM-L12-v2`) for native multilingual retrieval.
-- Add conversation memory for multi-turn follow-ups.
-- Deploy to Hugging Face Spaces for a permanent public demo.
-- Add WHO and CDC datasets for broader international coverage.
-- Fine-tune the translation step for better Bengali/Hindi accuracy.
 
 ---
 
